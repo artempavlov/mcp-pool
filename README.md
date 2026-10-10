@@ -9,7 +9,7 @@ mcp-pool is itself an MCP server. You configure one or more "pools" — each poo
 - **1 subprocess per pool at a time**, not per key. No warm standby processes.
 - On rate-limit or transport error, the current upstream is closed and a new one spawns with the next key (~1-2s failover).
 - Tools are exposed with `{poolName}__` prefix to avoid name collisions.
-- Route calls are serialized via a promise-chain mutex to prevent state races.
+- See [Sharing](#sharing) for how several agents share one set of upstreams.
 
 ## Sharing
 
@@ -20,8 +20,6 @@ The first agent connection starts a **daemon**, a detached local process that ow
 - Pass `--local` to opt out and run a standalone single-process server.
 
 Runtime state lives in `~/.mcp-pool/`, not `/tmp`, so the path is stable regardless of the child environment.
-
-Pass `--verbose` for per-request trace logs.
 
 ## Config
 
@@ -66,7 +64,7 @@ Serves the pooled tools over MCP Streamable HTTP at `http://host:port/mcp`, so r
   "mcpServers": {
     "mcp-pool": {
       "command": "bunx",
-      "args": ["mcp-pool@0.1.4", "--config", "/path/to/mcp-pool.yaml"]
+      "args": ["mcp-pool@0.2.0", "--config", "/path/to/mcp-pool.yaml"]
     }
   }
 }
@@ -99,6 +97,7 @@ All logs are JSON lines on stderr (stdout is reserved for MCP protocol):
 
 ```bash
 bun install --frozen-lockfile
+bun run lint
 bun run typecheck
 bun run test
 bun run smoke

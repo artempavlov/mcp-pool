@@ -5,9 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { runtimePaths } from "../src/ipc.js";
+import { readStatus, runtimePaths } from "../src/ipc.js";
 
-const _IDLE_GRACE_MS = 3_000;
 const SHUTDOWN_WAIT_MS = 8_000;
 
 interface Harness {
@@ -196,3 +195,48 @@ async function waitForProcessesGone(
 	}
 	return find().length === 0;
 }
+
+test("daemon startup failure surfaces the real reason, fast", async () => {
+	const directory = mkdtempSync(join(tmpdir(), "mcp-pool-daemon-fail-"));
+	const configFile = join(directory, "config.yaml");
+	// An upstream that exits immediately, so the daemon fails at startPools.
+	writeFileSync(
+		configFile,
+		`pools:
+  broken:
+    command: bun
+    args: ["run", "test/helper-server.ts"]
+    keys:
+      - { TEST_CRASH_ON_START: "1" }
+    rateLimitPatterns: ["rate_limit_exceeded"]
+`,
+	);
+
+	const paths = runtimePaths(configFile);
+	const transport = new StdioClientTransport({
+		command: "bun",
+		args: ["run", "src/index.ts", "--config", configFile],
+	});
+	const client = new Client(
+		{ name: "fail-agent", version: "0.1.0" },
+		{ capabilities: {} },
+	);
+
+	try {
+		const startedAt = Date.now();
+		// Must reject. A 10s spin instead of a fast reject means the status file
+		// is not being written or read.
+		await expect(client.connect(transport)).rejects.toThrow();
+		const elapsed = Date.now() - startedAt;
+		expect(elapsed).toBeLessThan(8_000);
+
+		// The daemon reported why it died through the status file, so the proxy
+		// prints the real reason on stderr instead of a bare disconnect.
+		const reason = readStatus(paths);
+		expect(reason).toMatch(/all 1 key\(s\) failed to connect/);
+	} finally {
+		await client.close().catch(() => {});
+		await transport.close().catch(() => {});
+		rmSync(directory, { recursive: true, force: true });
+	}
+}, 20_000);

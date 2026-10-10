@@ -5,6 +5,7 @@
  */
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import packageJson from "../package.json" with { type: "json" };
 
 async function main() {
 	console.error("smoke: starting proxy...");
@@ -21,9 +22,9 @@ async function main() {
 
 	await client.connect(transport);
 	console.error("smoke: connected");
-	if (client.getServerVersion()?.version !== "0.1.4") {
+	if (client.getServerVersion()?.version !== packageJson.version) {
 		throw new Error(
-			`unexpected server version: ${client.getServerVersion()?.version}`,
+			`unexpected server version: ${client.getServerVersion()?.version}, expected ${packageJson.version}`,
 		);
 	}
 

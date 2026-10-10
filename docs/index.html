@@ -90,9 +90,9 @@
     @media (prefers-reduced-motion: reduce) {
       html { scroll-behavior: auto; }
       *, *::before, *::after {
-        animation-duration: 0.01ms;
-        animation-iteration-count: 1;
-        transition-duration: 0.01ms;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
       }
     }
 
@@ -860,14 +860,14 @@
     }
 
     @media print {
-      .sidebar, .theme-toggle, .mobile-toggle, .sidebar-overlay { display: none; }
-      .main { margin-left: 0; }
+      .sidebar, .theme-toggle, .mobile-toggle, .sidebar-overlay { display: none !important; }
+      .main { margin-left: 0 !important; }
       body { background: white; color: black; }
       pre, code, .card, .callout { background: #f5f5f5; border: 1px solid #ccc; }
       a { color: #0066cc; }
       a[href^="http"]::after { content: " (" attr(href) ")"; font-size: 0.85em; overflow-wrap: break-word; }
-      .reveal { opacity: 1; transform: none; }
-      .code-block-wrapper .copy-btn { display: none; }
+      .reveal { opacity: 1 !important; transform: none !important; }
+      .code-block-wrapper .copy-btn { display: none !important; }
     }
 
     .code-block-wrapper {
@@ -899,7 +899,7 @@
     }
   </style>
   <script>
-  (() => {
+  (function() {
     var saved = localStorage.getItem('theme');
     if (saved) {
       document.documentElement.setAttribute('data-theme', saved);
@@ -911,7 +911,7 @@
       current === 'light' ? '#FFFBEB' : '#282a36';
   })();
   </script>
-  <noscript><style>.reveal { opacity: 1; transform: none; }</style></noscript>
+  <noscript><style>.reveal { opacity: 1 !important; transform: none !important; }</style></noscript>
 </head>
 <body>
 
@@ -1212,7 +1212,7 @@ bunx mcp-pool
 </main>
 
 <script>
-function _toggleSidebar() {
+function toggleSidebar() {
   var btn = document.getElementById('mobile-toggle');
   var sidebar = document.querySelector('.sidebar');
   var overlay = document.getElementById('sidebar-overlay');
@@ -1227,7 +1227,7 @@ function closeSidebar() {
   document.getElementById('mobile-toggle').setAttribute('aria-expanded', 'false');
 }
 
-document.addEventListener('keydown', (e) => {
+document.addEventListener('keydown', function(e) {
   if (e.key === 'Escape' && document.querySelector('.sidebar.open')) {
     closeSidebar();
   }
@@ -1235,17 +1235,17 @@ document.addEventListener('keydown', (e) => {
 
 var scrollingProgrammatically = false;
 
-document.querySelector('.sidebar-nav').addEventListener('click', (e) => {
+document.querySelector('.sidebar-nav').addEventListener('click', function(e) {
   var link = e.target.closest('a[href^="#"]');
   if (link) {
     closeSidebar();
     setActiveLink(link.getAttribute('href').slice(1));
     scrollingProgrammatically = true;
-    setTimeout(() => { scrollingProgrammatically = false; }, 800);
+    setTimeout(function() { scrollingProgrammatically = false; }, 800);
   }
 });
 
-function _toggleTheme() {
+function toggleTheme() {
   var html = document.documentElement;
   var current = html.getAttribute('data-theme');
   var next = current === 'light' ? 'dark' : 'light';
@@ -1256,7 +1256,7 @@ function _toggleTheme() {
   updateFavicon();
 }
 
-document.querySelectorAll('pre').forEach((pre) => {
+document.querySelectorAll('pre').forEach(function(pre) {
   var wrapper = document.createElement('div');
   wrapper.className = 'code-block-wrapper';
   pre.parentNode.insertBefore(wrapper, pre);
@@ -1265,20 +1265,20 @@ document.querySelectorAll('pre').forEach((pre) => {
   btn.className = 'copy-btn';
   btn.setAttribute('aria-label', 'Copy code');
   btn.innerHTML = '<span class="material-symbols-outlined" aria-hidden="true">content_copy</span>';
-  btn.addEventListener('click', () => {
+  btn.addEventListener('click', function() {
     var codeNode = pre.querySelector('code');
     var text = codeNode ? codeNode.textContent : pre.textContent;
-    navigator.clipboard.writeText(text).then(() => {
+    navigator.clipboard.writeText(text).then(function() {
       btn.innerHTML = '<span class="material-symbols-outlined" aria-hidden="true">check</span>';
       btn.setAttribute('aria-label', 'Copied');
-      setTimeout(() => {
+      setTimeout(function() {
         btn.innerHTML = '<span class="material-symbols-outlined" aria-hidden="true">content_copy</span>';
         btn.setAttribute('aria-label', 'Copy code');
       }, 2000);
-    }).catch(() => {
+    }).catch(function() {
       btn.innerHTML = '<span class="material-symbols-outlined" aria-hidden="true">close</span>';
       btn.setAttribute('aria-label', 'Copy failed');
-      setTimeout(() => {
+      setTimeout(function() {
         btn.innerHTML = '<span class="material-symbols-outlined" aria-hidden="true">content_copy</span>';
         btn.setAttribute('aria-label', 'Copy code');
       }, 2000);
@@ -1293,9 +1293,9 @@ function updateFavicon() {
   var svgEl = logo.querySelector('svg');
   if (!svgEl) return;
   var svg = svgEl.cloneNode(true);
-  ['fill', 'stroke'].forEach((attr) => {
+  ['fill', 'stroke'].forEach(function(attr) {
     var val = svg.getAttribute(attr);
-    if (val?.startsWith('var(--')) {
+    if (val && val.startsWith('var(--')) {
       var name = val.slice(4, -1);
       var resolved = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
       if (resolved) svg.setAttribute(attr, resolved);
@@ -1304,9 +1304,9 @@ function updateFavicon() {
   var walker = document.createTreeWalker(svg, NodeFilter.SHOW_ELEMENT);
   while (walker.nextNode()) {
     var el = walker.currentNode;
-    ['fill', 'stroke'].forEach((attr) => {
+    ['fill', 'stroke'].forEach(function(attr) {
       var val = el.getAttribute(attr);
-      if (val?.startsWith('var(--')) {
+      if (val && val.startsWith('var(--')) {
         var name = val.slice(4, -1);
         var resolved = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
         if (resolved) el.setAttribute(attr, resolved);
@@ -1315,21 +1315,21 @@ function updateFavicon() {
   }
   var svgData = new XMLSerializer().serializeToString(svg);
   document.getElementById('favicon').href =
-    `data:image/svg+xml,${encodeURIComponent(svgData)}`;
+    'data:image/svg+xml,' + encodeURIComponent(svgData);
 }
 
 updateFavicon();
 
 if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-  var revealObserver = new IntersectionObserver((entries) => {
-    entries.forEach((entry) => {
+  var revealObserver = new IntersectionObserver(function(entries) {
+    entries.forEach(function(entry) {
       if (entry.isIntersecting) {
         entry.target.classList.add('visible');
       }
     });
   }, { threshold: 0.1 });
 
-  document.querySelectorAll('.reveal').forEach((el) => {
+  document.querySelectorAll('.reveal').forEach(function(el) {
     revealObserver.observe(el);
   });
 }
@@ -1341,8 +1341,8 @@ var activeId = null;
 function setActiveLink(id) {
   if (id === activeId) return;
   activeId = id;
-  navLinks.forEach((link) => {
-    link.classList.toggle('active', link.getAttribute('href') === `#${id}`);
+  navLinks.forEach(function(link) {
+    link.classList.toggle('active', link.getAttribute('href') === '#' + id);
   });
 }
 
