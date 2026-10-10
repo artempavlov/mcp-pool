@@ -4,6 +4,16 @@ import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { log } from "./logger.js";
 import type { PoolConfig } from "./types.js";
 
+/** Upstream spawn/connect budget; a hung subprocess must not block startup. */
+const UPSTREAM_CONNECT_TIMEOUT_MS = 30_000;
+
+type CallResult = {
+	content: Array<{ type: "text"; text: string }>;
+	isError: boolean;
+};
+
+type Prepared = { kind: "call"; client: Client } | { kind: "skip" };
+
 export class Pool {
 	readonly name: string;
 	private config: PoolConfig;
@@ -50,23 +60,6 @@ export class Pool {
 		args: Record<string, unknown>,
 		verbose?: boolean,
 	): Promise<unknown> {
-		const prev = this.routeLock;
-		const next = Promise.withResolvers<void>();
-		this.routeLock = next.promise;
-		await prev;
-
-		try {
-			return await this.routeCallInner(toolName, args, verbose);
-		} finally {
-			next.resolve();
-		}
-	}
-
-	private async routeCallInner(
-		toolName: string,
-		args: Record<string, unknown>,
-		verbose?: boolean,
-	): Promise<unknown> {
 		if (!this.started) {
 			return {
 				content: [
@@ -80,27 +73,10 @@ export class Pool {
 		const cooldownSec = this.config.cooldownSeconds ?? 300;
 
 		for (let attempt = 0; attempt < maxKeys; attempt++) {
-			// Skip keys still in cooldown
-			if (this.cooldowns[this.cursor] > Date.now()) {
-				this.cursor = (this.cursor + 1) % maxKeys;
-				continue;
-			}
-
-			if (!this.client) {
-				try {
-					await this.spawnUpstream(this.cursor);
-				} catch (err) {
-					log({
-						level: "error",
-						event: "upstream_error",
-						pool: this.name,
-						upstream: this.cursor,
-						error: err instanceof Error ? err.message : String(err),
-					});
-					this.cursor = (this.cursor + 1) % maxKeys;
-					continue;
-				}
-			}
+			// Only the swap window is serialized; the call itself runs unlocked, so
+			// a slow web fetch no longer queues every other caller behind it.
+			const prepared = await this.withSwap(() => this.prepareNext());
+			if (prepared.kind === "skip") continue;
 
 			if (verbose) {
 				log({
@@ -112,15 +88,8 @@ export class Pool {
 				});
 			}
 
-			// Capture the client: spawnUpstream may have replaced it, and the
-			// lock only protects the swap window, not this call.
-			const client = this.client;
-			if (!client) {
-				continue;
-			}
-
 			try {
-				const result = await client.callTool({
+				const result = await prepared.client.callTool({
 					name: toolName,
 					arguments: args,
 				});
@@ -132,18 +101,7 @@ export class Pool {
 					);
 
 					if (isRateLimited) {
-						this.cooldowns[this.cursor] = Date.now() + cooldownSec * 1000;
-						log({
-							level: "warn",
-							event: "rate_limited",
-							pool: this.name,
-							upstream: this.cursor,
-							cooldownUntil: new Date(
-								this.cooldowns[this.cursor],
-							).toISOString(),
-						});
-						await this.closeCurrent();
-						this.cursor = (this.cursor + 1) % maxKeys;
+						await this.withSwap(() => this.markRateLimited(cooldownSec));
 						continue;
 					}
 
@@ -152,6 +110,47 @@ export class Pool {
 
 				return result;
 			} catch (err) {
+				await this.withSwap(() => this.markFailed(err));
+			}
+		}
+
+		return this.exhaustedError();
+	}
+
+	/**
+	 * Serializes only the section that mutates cursor/cooldowns/client. The
+	 * in-flight callTool runs outside it.
+	 */
+	private async withSwap<T>(fn: () => T | Promise<T>): Promise<T> {
+		const prev = this.routeLock;
+		const next = Promise.withResolvers<void>();
+		this.routeLock = next.promise;
+		await prev;
+
+		try {
+			return await fn();
+		} finally {
+			next.resolve();
+		}
+	}
+
+	/**
+	 * Picks the next usable upstream, spawning one when the pool is idle. Must
+	 * run inside withSwap because it mutates shared swap state. "skip" tells the
+	 * retry loop to advance to the next key.
+	 */
+	private async prepareNext(): Promise<Prepared> {
+		const maxKeys = this.config.keys.length;
+
+		if (this.cooldowns[this.cursor] > Date.now()) {
+			this.cursor = (this.cursor + 1) % maxKeys;
+			return { kind: "skip" };
+		}
+
+		if (!this.client) {
+			try {
+				await this.spawnUpstream(this.cursor);
+			} catch (err) {
 				log({
 					level: "error",
 					event: "upstream_error",
@@ -159,11 +158,48 @@ export class Pool {
 					upstream: this.cursor,
 					error: err instanceof Error ? err.message : String(err),
 				});
-				await this.closeCurrent();
 				this.cursor = (this.cursor + 1) % maxKeys;
+				return { kind: "skip" };
 			}
 		}
 
+		// Capture locally: spawnUpstream may have replaced this.client, and the
+		// lock deliberately does not cover the call itself.
+		const client = this.client;
+		if (!client) {
+			this.cursor = (this.cursor + 1) % maxKeys;
+			return { kind: "skip" };
+		}
+		return { kind: "call", client };
+	}
+
+	private async markRateLimited(cooldownSec: number): Promise<void> {
+		this.cooldowns[this.cursor] = Date.now() + cooldownSec * 1000;
+		log({
+			level: "warn",
+			event: "rate_limited",
+			pool: this.name,
+			upstream: this.cursor,
+			cooldownUntil: new Date(this.cooldowns[this.cursor]).toISOString(),
+		});
+		await this.closeCurrent();
+		this.cursor = (this.cursor + 1) % this.config.keys.length;
+	}
+
+	private async markFailed(err: unknown): Promise<void> {
+		log({
+			level: "error",
+			event: "upstream_error",
+			pool: this.name,
+			upstream: this.cursor,
+			error: err instanceof Error ? err.message : String(err),
+		});
+		await this.closeCurrent();
+		this.cursor = (this.cursor + 1) % this.config.keys.length;
+	}
+
+	private exhaustedError(): CallResult {
+		const maxKeys = this.config.keys.length;
 		const now = Date.now();
 		const active = this.cooldowns.filter((c) => c > now);
 
@@ -221,14 +257,34 @@ export class Pool {
 			{ capabilities: {} },
 		);
 
+		let onTimeout: (() => void) | undefined;
+		const timeout = new Promise<never>((_resolve, reject) => {
+			const timer = setTimeout(
+				() =>
+					reject(
+						new Error(
+							`upstream did not connect within ${UPSTREAM_CONNECT_TIMEOUT_MS}ms`,
+						),
+					),
+				UPSTREAM_CONNECT_TIMEOUT_MS,
+			);
+			// Do not let a hung handshake keep the event loop alive.
+			timer.unref?.();
+			onTimeout = () => clearTimeout(timer);
+		});
+
 		let tools: Tool[];
 		try {
-			await client.connect(transport);
-			const toolsResult = await client.listTools();
-			tools = toolsResult.tools as Tool[];
+			const handshake = await Promise.race([
+				client.connect(transport).then(() => client.listTools()),
+				timeout,
+			]);
+			tools = handshake.tools as Tool[];
 		} catch (err) {
 			await client.close().catch(() => {});
 			throw err;
+		} finally {
+			onTimeout?.();
 		}
 
 		if (this.cachedTools.length > 0) {

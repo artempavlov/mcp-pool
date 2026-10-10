@@ -38,7 +38,16 @@ Config paths (first found wins): `--config <path>`, `./mcp-pool.yaml`, `./.mcp-p
 4. `Pool.routeCall()`: try current upstream → forward call → on rate-limit (error text matches `rateLimitPatterns`) → close current, advance to next key, spawn new upstream, retry
 5. Transport errors (crash/broken pipe) → same as rate-limit: close, advance, spawn, retry
 6. Non-rate-limit `isError` → return to client immediately, no retry
-7. Route calls serialized via promise-chain mutex to prevent races on shared state
+7. Only the swap window is serialized (mutex); the in-flight `callTool` runs outside it so concurrent callers proceed in parallel
+
+## Serving modes
+
+- **proxy (default)**: agent's stdio session. Connects to the shared daemon; spawns one if the socket is missing or stale. Pure byte pipe, no MCP logic.
+- **`--daemon`**: detached process owning upstreams, one MCP `Server` per accepted connection. Exits when the last connection leaves, after `IDLE_GRACE_MS` (3s). `EADDRINUSE` means another daemon won the race — exits quietly.
+- **`--local`**: standalone single-process server, no sharing.
+- **`--http --port N [--host H]`**: stateless Streamable HTTP endpoint at `/mcp`, plus `GET /health`.
+
+Runtime sockets live in `~/.mcp-pool/<sha256(configPath)[:16]>.sock`. **Not** `os.tmpdir()`: the SDK's stdio transport filters `TMPDIR` out of the child environment, which would give the daemon a different directory than the agent that spawned it. A `.status` file carries `ready` or the daemon's startup error so proxies fail fast.
 
 ## Key behaviors
 
@@ -46,14 +55,16 @@ Config paths (first found wins): `--config <path>`, `./mcp-pool.yaml`, `./.mcp-p
 - **`rateLimitPatterns` safety gate**: without explicit patterns, all `isError` results are terminal. Use `[".*"]` for blanket retry on read-only pools.
 - **Per-key cooldown**: after a matching rate-limit error, that key is skipped for `cooldownSeconds` (300 seconds by default).
 - **Tool set validation on each spawn**: when a new upstream spawns, its tools are compared against the cached set (by name→schema map, order-independent). Mismatch → error, logged before that upstream is used.
+- **Parallel pool startup**: `Promise.allSettled` starts all pools at once; any failure closes the ones that started and rethrows. Removes the head-of-line stall of a slow upstream.
 - **No persistent state**: everything resets on restart.
-- **Stdio only**: HTTP upstreams would need transport field + factory.
+- **Stdio upstreams only**: HTTP upstreams would need transport field + factory.
 - **Resource cleanup**: `spawnUpstream` cleans up client on connection/tool-list failure; tool mismatch also closes the client before throwing.
 
 ## Test structure
 
 - `src/config.test.ts` — schema validation, YAML loading, and environment expansion
 - `src/pool.integration.test.ts` — startup, failover, key exhaustion, tool mismatch, and log redaction
-- `test/startup-cleanup.test.ts` — closes already-started pools when later startup fails
+- `test/startup-cleanup.test.ts` — closes already-started pools when later startup fails (uses `--local`)
+- `test/daemon-sharing.test.ts` — two agents over one daemon, teardown on last disconnect, recovery from a SIGKILLed daemon leaving a stale socket
 - `test/bin-smoke.ts` and `test/smoke-test.ts` — E2E stdio smoke coverage
 - `test/helper-server.ts` — configurable via env: `TEST_CRASH_ON_START`, `TEST_RATE_LIMIT_EVERY_N`, `TEST_RATE_LIMIT_COUNT`, `TEST_CRASH_AFTER`, `TEST_TOOL_ERROR_TEXT`, `TEST_TOOLS_JSON`

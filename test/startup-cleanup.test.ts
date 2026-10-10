@@ -73,7 +73,7 @@ test("closes started pools when a later pool fails startup", async () => {
 	try {
 		transport = new StdioClientTransport({
 			command: "bun",
-			args: ["run", "src/index.ts", "--config", configFile],
+			args: ["run", "src/index.ts", "--local", "--config", configFile],
 		});
 		client = new Client(
 			{ name: "startup-cleanup-test", version: "0.1.0" },

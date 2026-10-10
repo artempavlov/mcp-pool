@@ -11,6 +11,18 @@ mcp-pool is itself an MCP server. You configure one or more "pools" — each poo
 - Tools are exposed with `{poolName}__` prefix to avoid name collisions.
 - Route calls are serialized via a promise-chain mutex to prevent state races.
 
+## Sharing
+
+The first agent connection starts a **daemon**, a detached local process that owns the upstreams. Every later agent connects to that same daemon instead of spawning its own copies, so N agents cost **1 upstream per pool** rather than N. When the last agent disconnects, the daemon exits after a grace period.
+
+- Pools are keyed by config file, so different configs get different daemons.
+- A hard-killed daemon leaves a stale socket; the next agent detects it, removes it, and starts a fresh daemon.
+- Pass `--local` to opt out and run a standalone single-process server.
+
+Runtime state lives in `~/.mcp-pool/`, not `/tmp`, so the path is stable regardless of the child environment.
+
+Pass `--verbose` for per-request trace logs.
+
 ## Config
 
 ```yaml
@@ -38,6 +50,14 @@ pools:
 Config paths (first found wins): `--config <path>`, `./mcp-pool.yaml`, `./.mcp-pool.yaml`, `~/.config/mcp-pool/mcp-pool.yaml`.
 
 Values support `${VAR}` expansion from environment variables. An undefined reference is a configuration error.
+
+## Web server mode
+
+```bash
+mcp-pool --http --port 3000
+```
+
+Serves the pooled tools over MCP Streamable HTTP at `http://host:port/mcp`, so remote clients and non-stdio hosts can use the same pools. `GET /health` returns pool count. Bind to `0.0.0.0` (`--host 0.0.0.0`) to accept remote connections; the default `127.0.0.1` is local only.
 
 ## Usage
 
@@ -69,7 +89,8 @@ All logs are JSON lines on stderr (stdout is reserved for MCP protocol):
 ## Design
 
 - **Lazy failover**: 1 process per pool. Rate-limited/crashed keys are closed and replaced with the next key on demand; rate-limited keys are skipped for `cooldownSeconds` (300 seconds by default).
-- **Serialized calls**: promise-chain mutex prevents races on shared state across `await` points.
+- **Serialized swaps**: the promise-chain mutex covers only the state swap (spawn, close, cursor move), not the in-flight call, so concurrent callers still reach the upstream in parallel.
+- **Shared daemon**: one daemon per config serves every agent, so upstreams are not duplicated per agent. See [Sharing](#sharing).
 - **Tool validation**: each spawned upstream's tools are validated against the cached set (by name→schema map, order-independent).
 - **`rateLimitPatterns` is required**: without explicit patterns, all `isError` results are terminal — no retries. Use `[".*"]` for blanket retry on read-only pools.
 - **Stdio upstreams only**: upstream MCP servers are spawned as subprocesses.
