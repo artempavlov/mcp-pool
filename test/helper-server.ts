@@ -11,82 +11,93 @@
  */
 
 if (process.env.TEST_CRASH_ON_START === "1") {
-  process.exit(1);
+	process.exit(1);
 }
 
 import { writeFileSync } from "node:fs";
 
 const lifecycleFile = process.env.TEST_LIFECYCLE_FILE;
 if (lifecycleFile) {
-  writeFileSync(lifecycleFile, "started");
-  process.on("exit", () => writeFileSync(lifecycleFile, "closed"));
+	writeFileSync(lifecycleFile, "started");
+	process.on("exit", () => writeFileSync(lifecycleFile, "closed"));
 }
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
+	CallToolRequestSchema,
+	ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 
 let callCount = 0;
 let rateLimitCount = 0;
 
 const defaultTools = [
-  { name: "echo", inputSchema: { type: "object" as const, properties: { message: { type: "string" } }, required: ["message"] } },
+	{
+		name: "echo",
+		inputSchema: {
+			type: "object" as const,
+			properties: { message: { type: "string" } },
+			required: ["message"],
+		},
+	},
 ];
 
 function getTools() {
-  const raw = process.env.TEST_TOOLS_JSON;
-  if (!raw) return defaultTools;
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) && parsed.length > 0 ? parsed : defaultTools;
-  } catch {
-    return defaultTools;
-  }
+	const raw = process.env.TEST_TOOLS_JSON;
+	if (!raw) return defaultTools;
+	try {
+		const parsed = JSON.parse(raw);
+		return Array.isArray(parsed) && parsed.length > 0 ? parsed : defaultTools;
+	} catch {
+		return defaultTools;
+	}
 }
 
-const rateLimitEveryN = parseInt(process.env.TEST_RATE_LIMIT_EVERY_N || "0", 10);
+const rateLimitEveryN = parseInt(
+	process.env.TEST_RATE_LIMIT_EVERY_N || "0",
+	10,
+);
 const rateLimitMax = parseInt(process.env.TEST_RATE_LIMIT_COUNT || "0", 10);
 const crashAfter = parseInt(process.env.TEST_CRASH_AFTER || "0", 10);
 const errorText = process.env.TEST_TOOL_ERROR_TEXT || "rate_limit_exceeded";
 
 const server = new Server(
-  { name: "test-helper-server", version: "0.1.0" },
-  { capabilities: { tools: {} } },
+	{ name: "test-helper-server", version: "0.1.0" },
+	{ capabilities: { tools: {} } },
 );
 
 server.setRequestHandler(ListToolsRequestSchema, async () => {
-  return { tools: getTools() };
+	return { tools: getTools() };
 });
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  callCount++;
+	callCount++;
 
-  if (crashAfter > 0 && callCount >= crashAfter) {
-    process.exit(1);
-  }
+	if (crashAfter > 0 && callCount >= crashAfter) {
+		process.exit(1);
+	}
 
-  const shouldRateLimit = rateLimitEveryN > 0 && callCount % rateLimitEveryN === 0;
-  const rateLimitExhausted = rateLimitMax > 0 && rateLimitCount >= rateLimitMax;
+	const shouldRateLimit =
+		rateLimitEveryN > 0 && callCount % rateLimitEveryN === 0;
+	const rateLimitExhausted = rateLimitMax > 0 && rateLimitCount >= rateLimitMax;
 
-  if (shouldRateLimit && !rateLimitExhausted) {
-    rateLimitCount++;
-    return {
-      content: [{ type: "text" as const, text: errorText }],
-      isError: true,
-    };
-  }
+	if (shouldRateLimit && !rateLimitExhausted) {
+		rateLimitCount++;
+		return {
+			content: [{ type: "text" as const, text: errorText }],
+			isError: true,
+		};
+	}
 
-  return {
-    content: [
-      {
-        type: "text" as const,
-        text: JSON.stringify(request.params.arguments ?? {}),
-      },
-    ],
-  };
+	return {
+		content: [
+			{
+				type: "text" as const,
+				text: JSON.stringify(request.params.arguments ?? {}),
+			},
+		],
+	};
 });
 
 const transport = new StdioServerTransport();
