@@ -2,6 +2,43 @@
 
 **MCP Key Pool Proxy** — pool multiple API keys across upstream MCP servers to distribute rate limits.
 
+## Maintained fork
+
+This fork of [yuzu-octopus/mcp-pool](https://github.com/yuzu-octopus/mcp-pool)
+includes these fixes:
+
+- Concurrent failures retain the originating client and key index. Late errors
+  cannot cool down an unused healthy key or close its replacement client.
+- Known unflagged Context7 auth/quota error prefixes can trigger the configured
+  failover patterns; arbitrary documentation text does not trigger a retry.
+- HTTP mode creates a stateless MCP session per request, with shared pools.
+  Repeated and concurrent remote requests no longer reuse an invalid transport.
+- Exhaustion diagnostics include quota/auth failures, rather than describing
+  every upstream error as a request-frequency limit.
+
+Native installation needs Node.js 22 or newer and npm; Docker is optional:
+
+```sh
+git clone https://github.com/artempavlov/mcp-pool.git
+cd mcp-pool
+npm ci
+npm run build
+node dist/index.js --local --config /absolute/path/to/mcp-pool.yaml
+```
+
+Upstream executables must be installed separately and available through `PATH`
+or configured with absolute paths. Keep actual API keys in private runtime
+configuration, outside this repository. Tests run with Bun; the CLI runs on Node.
+
+`src/pool.failover.test.ts` covers concurrent/stale failures and Context7 error
+classification. `test/http-stateless.test.ts` exercises two real MCP HTTP clients
+with repeated requests. No paid service or real API key is needed by these tests.
+
+The optional `Dockerfile` builds this fork with `npm ci` and includes pinned Exa
+and Context7 executables. Mount a private YAML config at `/app/mcp-pool.yaml`;
+override the command with `--http --host 0.0.0.0 --port PORT --config
+/app/mcp-pool.yaml` for HTTP mode. `SOURCE_REVISION` labels the built revision.
+
 ## How it works
 
 mcp-pool is itself an MCP server. You configure one or more "pools" — each pool represents one upstream MCP server type (e.g. Brave Search) with N API keys.

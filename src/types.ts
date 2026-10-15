@@ -43,7 +43,7 @@ export type LogEvent =
 	  }
 	| {
 			level: "error";
-			event: "upstream_error";
+			event: "upstream_error" | "http_request_error";
 			pool: string;
 			upstream: number;
 			error: string;
