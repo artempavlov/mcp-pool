@@ -26,6 +26,10 @@ pools:
     rateLimitPatterns: string[]  # required, at least 1, all valid regex
     cooldownSeconds?: number   # seconds a rate-limited key is skipped; defaults to 300
     cwd?: string
+    transientRetry?:          # opt in only for replay-safe tools
+      tools: string[]         # exact upstream tool names
+      errorPatterns: string[] # valid regexes matching flagged tool errors
+      delaysMs: number[]      # 1–5 additional attempts, each delay 0–10000 ms
 ```
 
 Config paths (first found wins): `--config <path>`, `./mcp-pool.yaml`, `./.mcp-pool.yaml`, `~/.config/mcp-pool/mcp-pool.yaml`.
@@ -37,7 +41,7 @@ Config paths (first found wins): `--config <path>`, `./mcp-pool.yaml`, `./.mcp-p
 3. First upstream's tools are cached as the pool's tool set; subsequent spawns validate tool consistency
 4. `Pool.routeCall()`: capture client and key index → forward call → on matching error cool down the captured key; close/advance only if that client is still current, then retry
 5. Transport errors (crash/broken pipe) → close/advance only if the captured client is still current. Late errors cannot close its replacement.
-6. Non-rate-limit `isError` → return to client immediately, no retry
+6. Non-rate-limit `isError` → optional `transientRetry` on the same client/key for listed tools and matching errors; otherwise return immediately. Quota patterns take precedence. Bounded backoff runs outside the mutex; a replaced client is never retried.
 7. Only the swap window is serialized (mutex); the in-flight `callTool` runs outside it so concurrent callers proceed in parallel
 
 ## Serving modes
@@ -67,6 +71,7 @@ Runtime sockets live in `~/.mcp-pool/<sha256(configPath)[:16]>.sock`. **Not** `o
 - `src/config.test.ts` — schema validation, YAML loading, and environment expansion
 - `src/pool.integration.test.ts` — startup, failover, key exhaustion, tool mismatch, and log redaction
 - `src/pool.failover.test.ts` — concurrent budget errors, stale transport failures, Context7 error prefixes, and exhaustion diagnostics
+- `src/pool.transient.test.ts` — opt-in bounded same-key retries, argument preservation, quota priority, concurrent replacement and real stdio recovery
 - `test/http-stateless.test.ts` — real repeated/concurrent MCP HTTP clients
 - `test/startup-cleanup.test.ts` — closes already-started pools when later startup fails (uses `--local`)
 - `test/daemon-sharing.test.ts` — two agents over one daemon, teardown on last disconnect, recovery from a SIGKILLed daemon leaving a stale socket

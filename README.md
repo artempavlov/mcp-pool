@@ -15,6 +15,8 @@ includes these fixes:
   Repeated and concurrent remote requests no longer reuse an invalid transport.
 - Exhaustion diagnostics include quota/auth failures, rather than describing
   every upstream error as a request-frequency limit.
+- Opt-in transient retries recover read-only tool calls on the same key,
+  without replacing the upstream executable or cooling down healthy keys.
 
 Native installation needs Node.js 22 or newer and npm; Docker is optional:
 
@@ -81,10 +83,53 @@ pools:
 | `rateLimitPatterns` | Regex patterns matched against tool error text (required, at least 1 — safety gate) |
 | `cooldownSeconds` | Seconds a rate-limited key is skipped; defaults to 300 |
 | `cwd` | Working directory for the upstream process |
+| `transientRetry` | Optional bounded retries for explicitly listed replay-safe tools; see below |
 
 Config paths (first found wins): `--config <path>`, `./mcp-pool.yaml`, `./.mcp-pool.yaml`, `~/.config/mcp-pool/mcp-pool.yaml`.
 
 Values support `${VAR}` expansion from environment variables. An undefined reference is a configuration error.
+
+### Transient network failures
+
+Exa MCP 3.4.2 returns `web_search_exa error: fetch failed` for intermittent
+connection failures. Its internal retries cover certain HTTP errors but not
+these network failures. Configure retries in the pool while launching Exa directly:
+
+```yaml
+pools:
+  exa:
+    command: exa-mcp-server
+    args: []
+    keys:
+      - {EXA_API_KEY: "${EXA_KEY_1}"}
+      - {EXA_API_KEY: "${EXA_KEY_2}"}
+    rateLimitPatterns: ['\b(401|402|403|429)\b', '[Bb]udget|[Qq]uota']
+    transientRetry:
+      tools: [web_search_exa, web_fetch_exa]
+      errorPatterns: ['^web_(search|fetch)_exa error: fetch failed$']
+      delaysMs: [250, 750, 1500]
+```
+
+Retries are disabled by default. All three fields are required when enabled:
+nonempty tool names, valid error regexes, and one to five integer delays between
+0 and 10000 ms. Each delay permits one additional attempt per key. Only flagged
+MCP tool errors matching both the tool allowlist and an error pattern are retried.
+List only tools whose calls can be safely replayed. Use narrow error patterns;
+successful text and nonmatching failures pass through unchanged.
+
+Calls retry with the same arguments and key. Quota/auth patterns take precedence
+and retain normal key failover, even when transient patterns overlap. Backoff
+does not hold the swap mutex. If a concurrent caller replaces the client, the
+waiting call resumes through normal failover rather than reusing the old client.
+After the configured retries, the final upstream result is returned unchanged.
+Logs record `transient_retry`, tool, key index, attempt and delay, without
+arguments, credentials or raw error text. MCP transport exceptions retain the
+existing failover behavior.
+
+This handles the error exposed by Exa at the MCP boundary; it cannot recover
+nested network codes that Exa omits, or fix the underlying network connection.
+`src/pool.transient.test.ts` covers bounded retries, direct stdio recovery,
+quota priority, exclusions and concurrent replacement.
 
 ## Web server mode
 
